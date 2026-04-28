@@ -30,6 +30,9 @@ const startSession = async (req, res) => {
 
     await client.query('COMMIT');
 
+    // Update study streak
+    await updateStreak(req.userId);
+
     return res.status(201).json({
       success:   true,
       message:   'Study session started!',

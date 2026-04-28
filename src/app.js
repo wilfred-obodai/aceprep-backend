@@ -14,6 +14,9 @@ const aiRoutes = require('./routes/ai');
 const examRoutes = require('./routes/exams');
 const assignmentRoutes = require('./routes/assignments');
 const reportCardRoutes = require('./routes/reportCard');
+const leaderboardRoutes = require('./routes/leaderboard');
+const streakRoutes      = require('./routes/streaks');
+const parentRoutes      = require('./routes/parents');
 
 const app = express();
 
@@ -35,6 +38,9 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/exams', examRoutes);
 app.use('/api/assignments', assignmentRoutes);
 app.use('/api/report-card', reportCardRoutes);
+app.use('/api/leaderboard', leaderboardRoutes);
+app.use('/api/streaks',     streakRoutes);
+app.use('/api/parents',     parentRoutes);
 
 // ── Health Check ─────────────────────────
 app.get('/', (req, res) => {

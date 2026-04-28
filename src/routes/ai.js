@@ -1,7 +1,7 @@
-const express  = require('express');
-const router   = express.Router();
+const express    = require('express');
+const router     = express.Router();
 const { protect } = require('../middleware/auth');
-const { chat } = require('../controllers/aiController');
+const { chat }   = require('../controllers/aiController');
 
 router.post('/chat', protect, chat);
 
