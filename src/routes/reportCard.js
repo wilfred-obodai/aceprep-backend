@@ -1,8 +1,9 @@
 const express  = require('express');
 const router   = express.Router();
 const { protect, adminOnly } = require('../middleware/auth');
-const { generateReportCard } = require('../controllers/reportCardController');
+const { generateReportCard, sendReportCardEmail } = require('../controllers/reportCardController');
 
-router.get('/:studentId', protect, adminOnly, generateReportCard);
+router.get('/:studentId',            protect, adminOnly, generateReportCard);
+router.post('/:studentId/send-email', protect, adminOnly, sendReportCardEmail);
 
 module.exports = router;

@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { updateStreak } = require('./streakController');
 
 // ══════════════════════════════════════════════
 // VALIDATE SCHOOL CODE
