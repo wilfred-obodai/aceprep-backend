@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { updateStreak } = require('./streakController');
 
 // ══════════════════════════════════════════════
 // START STUDY SESSION (Login tracking)
@@ -106,18 +107,15 @@ const getStudentProfile = async (req, res) => {
               s.class_name, s.shs_track, s.student_type,
               s.gender, s.date_of_birth, s.created_at,
               sc.name as school_name, sc.code as school_code,
-              -- Total study time this week
               COALESCE(SUM(ss.duration_minutes) FILTER (
                 WHERE ss.login_at >= NOW() - INTERVAL '7 days'
               ), 0) as study_minutes_this_week,
-              -- Total sessions
               COUNT(DISTINCT ss.id) as total_sessions,
-              -- Study streak (days studied in last 30 days)
               COUNT(DISTINCT DATE(ss.login_at)) FILTER (
                 WHERE ss.login_at >= NOW() - INTERVAL '30 days'
               ) as study_days_this_month
        FROM students s
-       LEFT JOIN schools sc       ON s.school_id  = sc.id
+       LEFT JOIN schools sc        ON s.school_id  = sc.id
        LEFT JOIN study_sessions ss ON ss.student_id = s.id
        WHERE s.id = $1
        GROUP BY s.id, sc.name, sc.code`,
@@ -136,22 +134,22 @@ const getStudentProfile = async (req, res) => {
     return res.status(200).json({
       success: true,
       student: {
-        id:                  s.id,
-        fullName:            s.full_name,
-        email:               s.email,
-        level:               s.level,
-        yearGroup:           s.year_group,
-        className:           s.class_name,
-        shsTrack:            s.shs_track,
-        studentType:         s.student_type,
-        gender:              s.gender,
-        dateOfBirth:         s.date_of_birth,
-        schoolName:          s.school_name,
-        schoolCode:          s.school_code,
+        id:                   s.id,
+        fullName:             s.full_name,
+        email:                s.email,
+        level:                s.level,
+        yearGroup:            s.year_group,
+        className:            s.class_name,
+        shsTrack:             s.shs_track,
+        studentType:          s.student_type,
+        gender:               s.gender,
+        dateOfBirth:          s.date_of_birth,
+        schoolName:           s.school_name,
+        schoolCode:           s.school_code,
         studyMinutesThisWeek: parseInt(s.study_minutes_this_week),
-        totalSessions:       parseInt(s.total_sessions),
-        studyDaysThisMonth:  parseInt(s.study_days_this_month),
-        joinedAt:            s.created_at,
+        totalSessions:        parseInt(s.total_sessions),
+        studyDaysThisMonth:   parseInt(s.study_days_this_month),
+        joinedAt:             s.created_at,
       }
     });
 
