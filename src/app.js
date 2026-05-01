@@ -17,6 +17,12 @@ const reportCardRoutes = require('./routes/reportCard');
 const leaderboardRoutes = require('./routes/leaderboard');
 const streakRoutes      = require('./routes/streaks');
 const parentRoutes      = require('./routes/parents');
+const announcementRoutes = require('./routes/announcements');
+const timetableRoutes    = require('./routes/timetable');
+const path            = require('path');
+const uploadRoutes    = require('./routes/upload');
+const attendanceRoutes = require('./routes/attendance');
+const messageRoutes   = require('./routes/messages');
 
 const app = express();
 
@@ -41,6 +47,14 @@ app.use('/api/report-card', reportCardRoutes);
 app.use('/api/leaderboard', leaderboardRoutes);
 app.use('/api/streaks',     streakRoutes);
 app.use('/api/parents',     parentRoutes);
+app.use('/api/announcements', announcementRoutes);
+app.use('/api/timetable',     timetableRoutes);
+app.use('/api/upload',     uploadRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/messages',   messageRoutes);
+
+// Serve uploaded files statically
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // ── Health Check ─────────────────────────
 app.get('/', (req, res) => {
