@@ -42,6 +42,8 @@ const xpRoutes           = require('./routes/xp');
 const analyticsRoutes    = require('./routes/analytics');
 const videoRoomRoutes    = require('./routes/videoRooms');
 const battleRoutes       = require('./routes/battle');
+const pastQuestionsPdfRoutes = require('./routes/pastQuestionsPdf');
+const aiTutorHistoryRoutes   = require('./routes/aiTutorHistory');
 
 app.use('/api/auth',          authRoutes);
 app.use('/api/schools',       schoolRoutes);
@@ -64,6 +66,8 @@ app.use('/api/xp',            xpRoutes);
 app.use('/api/analytics',     analyticsRoutes);
 app.use('/api/video-rooms',   videoRoomRoutes);
 app.use('/api/battle',        battleRoutes);
+app.use('/api/past-questions-pdf', pastQuestionsPdfRoutes);
+app.use('/api/ai-tutor-history',   aiTutorHistoryRoutes);
 
 // ── Socket.io for Quiz Battle ──────────────────
 const battleRooms = {};

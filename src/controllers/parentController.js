@@ -1,206 +1,76 @@
-const pool   = require('../config/db');
-const bcrypt = require('bcryptjs');
-const jwt    = require('jsonwebtoken');
-const crypto = require('crypto');
+const pool = require('../config/db');
+const jwt  = require('jsonwebtoken');
 
 const generateToken = (id, role) =>
   jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
 // ══════════════════════════════════════════════
-// REGISTER PARENT
-// POST /api/parents/register
-// ══════════════════════════════════════════════
-const registerParent = async (req, res) => {
-  const { fullName, email, password, phone, studentCode } = req.body;
-
-  if (!fullName || !email || !password || !studentCode) {
-    return res.status(400).json({
-      success: false,
-      message: 'Full name, email, password and student code are required'
-    });
-  }
-
-  try {
-    // Find student by school code (parent enters child's school code)
-    const studentResult = await pool.query(
-      `SELECT s.id, s.full_name, s.school_id
-       FROM students s
-       JOIN schools sc ON sc.id = s.school_id
-       WHERE sc.code = $1`,
-      [studentCode.toUpperCase()]
-    );
-
-    if (studentResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Student not found. Please check the school code.'
-      });
-    }
-
-    const student = studentResult.rows[0];
-
-    // Check if parent already registered
-    const existing = await pool.query(
-      'SELECT id FROM parents WHERE email = $1',
-      [email]
-    );
-
-    if (existing.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'An account with this email already exists'
-      });
-    }
-
-    const hashedPassword      = await bcrypt.hash(password, 12);
-    const verificationToken   = crypto.randomBytes(32).toString('hex');
-
-    const result = await pool.query(
-      `INSERT INTO parents
-        (student_id, full_name, email, password, phone,
-         verification_token, is_verified)
-       VALUES ($1, $2, $3, $4, $5, $6, true)
-       RETURNING id, full_name, email`,
-      [student.id, fullName, email, hashedPassword, phone, verificationToken]
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: 'Parent account created! You can now login to monitor your child.',
-      parent:  { id: result.rows[0].id, fullName, email }
-    });
-
-  } catch (error) {
-    console.error('Register parent error:', error.message);
-    return res.status(500).json({ success: false, message: 'Server error' });
-  }
-};
-
-// ══════════════════════════════════════════════
-// LOGIN PARENT
-// POST /api/parents/login
-// ══════════════════════════════════════════════
-const loginParent = async (req, res) => {
-  const { email, password } = req.body;
-
-  try {
-    const result = await pool.query(
-      `SELECT p.*, s.full_name as student_name,
-               s.level, s.year_group, s.class_name,
-               sc.name as school_name, sc.code as school_code
-       FROM parents p
-       JOIN students s ON s.id = p.student_id
-       LEFT JOIN schools sc ON sc.id = s.school_id
-       WHERE p.email = $1`,
-      [email]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(401).json({ success: false, message: 'Invalid email or password' });
-    }
-
-    const parent  = result.rows[0];
-    const isMatch = await bcrypt.compare(password, parent.password);
-
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid email or password' });
-    }
-
-    const token = generateToken(parent.id, 'parent');
-
-    return res.status(200).json({
-      success: true,
-      message: 'Login successful!',
-      token,
-      parent: {
-        id:          parent.id,
-        fullName:    parent.full_name,
-        email:       parent.email,
-        studentId:   parent.student_id,
-        studentName: parent.student_name,
-        level:       parent.level,
-        yearGroup:   parent.year_group,
-        className:   parent.class_name,
-        schoolName:  parent.school_name,
-        schoolCode:  parent.school_code,
-      }
-    });
-
-  } catch (error) {
-    console.error('Parent login error:', error.message);
-    return res.status(500).json({ success: false, message: 'Server error' });
-  }
-};
-
-// ══════════════════════════════════════════════
-// GET CHILD PROGRESS (Parent)
-// GET /api/parents/child-progress
+// GET CHILD PROGRESS
 // ══════════════════════════════════════════════
 const getChildProgress = async (req, res) => {
   try {
+    const parentId = req.userId;
+
     const parentResult = await pool.query(
-      'SELECT student_id FROM parents WHERE id = $1',
-      [req.userId]
+      'SELECT * FROM parents WHERE id = $1', [parentId]
     );
+    if (parentResult.rows.length === 0)
+      return res.status(404).json({ success: false, message: 'Parent not found' });
 
-    const studentId = parentResult.rows[0]?.student_id;
-    if (!studentId) {
-      return res.status(404).json({ success: false, message: 'Student not found' });
-    }
+    const parent = parentResult.rows[0];
+    if (!parent.student_id && !parent.child_email)
+      return res.json({ success: true, student: null, stats: null });
 
-    // Get student info
+    // Find student
     const studentResult = await pool.query(
-      `SELECT s.*, sc.name as school_name
+      `SELECT s.*, sc.name as school_name, sc.code as school_code
        FROM students s
-       LEFT JOIN schools sc ON sc.id = s.school_id
-       WHERE s.id = $1`,
-      [studentId]
+       LEFT JOIN schools sc ON s.school_id = sc.id
+       WHERE s.id = $1 OR s.email = $2
+       LIMIT 1`,
+      [parent.student_id || 0, parent.child_email || '']
     );
 
-    // Get grades
-    const gradesResult = await pool.query(
-      `SELECT subject, assessment_name, assessment_type,
-              score, max_score, percentage, grade_letter, created_at
-       FROM grades
-       WHERE student_id = $1
-       ORDER BY created_at DESC
-       LIMIT 20`,
-      [studentId]
-    );
-
-    // Get study sessions
-    const sessionsResult = await pool.query(
-      `SELECT started_at, ended_at, duration_minutes, device_type
-       FROM study_sessions
-       WHERE student_id = $1
-       ORDER BY started_at DESC
-       LIMIT 10`,
-      [studentId]
-    );
-
-    // Get streak
-    const streakResult = await pool.query(
-      'SELECT * FROM study_streaks WHERE student_id = $1',
-      [studentId]
-    );
-
-    // Get badges
-    const badgesResult = await pool.query(
-      'SELECT * FROM badges WHERE student_id = $1 ORDER BY earned_at DESC',
-      [studentId]
-    );
-
-    // Calculate stats
-    const grades       = gradesResult.rows;
-    const avgScore     = grades.length > 0
-      ? parseFloat((grades.reduce((s, g) => s + parseFloat(g.percentage), 0) / grades.length).toFixed(1))
-      : 0;
-    const overallGrade = avgScore >= 80 ? 'A' : avgScore >= 70 ? 'B' : avgScore >= 60 ? 'C' :
-                         avgScore >= 50 ? 'D' : avgScore >= 40 ? 'E' : 'F';
+    if (studentResult.rows.length === 0)
+      return res.json({ success: true, student: null, stats: null });
 
     const student = studentResult.rows[0];
 
-    return res.status(200).json({
+    // Stats queries
+    const [gradesRes, attRes, streakRes, examRes, recentRes] = await Promise.all([
+      pool.query(
+        'SELECT AVG(percentage) as avg_score FROM grades WHERE student_id = $1',
+        [student.id]
+      ),
+      pool.query(
+        `SELECT
+          COUNT(*) FILTER (WHERE status='present') as present,
+          COUNT(*) FILTER (WHERE status='absent')  as absent,
+          COUNT(*) FILTER (WHERE status='late')    as late,
+          COUNT(*) as total
+         FROM attendance WHERE student_id = $1`,
+        [student.id]
+      ),
+      pool.query(
+        'SELECT current_streak FROM study_streaks WHERE student_id = $1',
+        [student.id]
+      ),
+      pool.query(
+        'SELECT COUNT(*) as total FROM exam_attempts WHERE student_id = $1',
+        [student.id]
+      ),
+      pool.query(
+        `SELECT subject, percentage as score, grade_letter as grade, created_at
+         FROM grades WHERE student_id = $1
+         ORDER BY created_at DESC LIMIT 5`,
+        [student.id]
+      ),
+    ]);
+
+    const att        = attRes.rows[0];
+    const attPercent = att.total > 0 ? Math.round((att.present / att.total) * 100) : 0;
+
+    return res.json({
       success: true,
       student: {
         id:         student.id,
@@ -210,46 +80,132 @@ const getChildProgress = async (req, res) => {
         yearGroup:  student.year_group,
         className:  student.class_name,
         schoolName: student.school_name,
+        schoolCode: student.school_code,
       },
-      performance: {
-        averageScore:     avgScore,
-        overallGrade,
-        totalAssessments: grades.length,
-        recentGrades:     grades.slice(0, 5).map(g => ({
-          subject:        g.subject,
-          assessmentName: g.assessment_name,
-          score:          g.score,
-          maxScore:       g.max_score,
-          percentage:     g.percentage,
-          gradeLetter:    g.grade_letter,
-          date:           g.created_at,
-        })),
+      stats: {
+        avgScore:   Math.round(gradesRes.rows[0]?.avg_score || 0),
+        examsTaken: parseInt(examRes.rows[0]?.total || 0),
+        attendance: attPercent,
+        streak:     streakRes.rows[0]?.current_streak || 0,
       },
-      studyActivity: {
-        totalSessions: sessionsResult.rows.length,
-        recentSessions: sessionsResult.rows.map(s => ({
-          startedAt:       s.started_at,
-          endedAt:         s.ended_at,
-          durationMinutes: s.duration_minutes,
-          deviceType:      s.device_type,
-        })),
-        streak: streakResult.rows[0] ? {
-          currentStreak: streakResult.rows[0].current_streak,
-          longestStreak: streakResult.rows[0].longest_streak,
-          totalDays:     streakResult.rows[0].total_days,
-        } : { currentStreak: 0, longestStreak: 0, totalDays: 0 },
-      },
-      badges: badgesResult.rows.map(b => ({
-        name:        b.badge_name,
-        description: b.description,
-        earnedAt:    b.earned_at,
-      })),
+      recentGrades: recentRes.rows,
     });
 
   } catch (error) {
-    console.error('Child progress error:', error.message);
+    console.error('Get child progress error:', error.message);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
-module.exports = { registerParent, loginParent, getChildProgress };
+// ══════════════════════════════════════════════
+// GET CHILD GRADES
+// ══════════════════════════════════════════════
+const getChildGrades = async (req, res) => {
+  try {
+    const parentId = req.userId;
+    const parent   = await pool.query('SELECT * FROM parents WHERE id = $1', [parentId]);
+    if (parent.rows.length === 0)
+      return res.status(404).json({ success: false, message: 'Parent not found' });
+
+    const p = parent.rows[0];
+    if (!p.student_id && !p.child_email)
+      return res.json({ success: true, grades: [] });
+
+    const studentRes = await pool.query(
+      'SELECT id FROM students WHERE id = $1 OR email = $2 LIMIT 1',
+      [p.student_id || 0, p.child_email || '']
+    );
+    if (studentRes.rows.length === 0)
+      return res.json({ success: true, grades: [] });
+
+    const grades = await pool.query(
+      `SELECT subject, percentage as score, grade_letter as grade,
+              assessment_name, assessment_type, created_at
+       FROM grades WHERE student_id = $1
+       ORDER BY created_at DESC`,
+      [studentRes.rows[0].id]
+    );
+
+    return res.json({ success: true, grades: grades.rows });
+  } catch (error) {
+    console.error('Get child grades error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ══════════════════════════════════════════════
+// GET CHILD ATTENDANCE
+// ══════════════════════════════════════════════
+const getChildAttendance = async (req, res) => {
+  try {
+    const parentId = req.userId;
+    const parent   = await pool.query('SELECT * FROM parents WHERE id = $1', [parentId]);
+    if (parent.rows.length === 0)
+      return res.status(404).json({ success: false, message: 'Parent not found' });
+
+    const p = parent.rows[0];
+    if (!p.student_id && !p.child_email)
+      return res.json({ success: true, records: [], stats: { present: 0, absent: 0, late: 0 } });
+
+    const studentRes = await pool.query(
+      'SELECT id FROM students WHERE id = $1 OR email = $2 LIMIT 1',
+      [p.student_id || 0, p.child_email || '']
+    );
+    if (studentRes.rows.length === 0)
+      return res.json({ success: true, records: [], stats: { present: 0, absent: 0, late: 0 } });
+
+    const sid = studentRes.rows[0].id;
+
+    const [records, stats] = await Promise.all([
+      pool.query('SELECT * FROM attendance WHERE student_id = $1 ORDER BY date DESC', [sid]),
+      pool.query(
+        `SELECT
+          COUNT(*) FILTER (WHERE status='present') as present,
+          COUNT(*) FILTER (WHERE status='absent')  as absent,
+          COUNT(*) FILTER (WHERE status='late')    as late
+         FROM attendance WHERE student_id = $1`,
+        [sid]
+      ),
+    ]);
+
+    return res.json({ success: true, records: records.rows, stats: stats.rows[0] });
+  } catch (error) {
+    console.error('Get child attendance error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ══════════════════════════════════════════════
+// LINK CHILD
+// ══════════════════════════════════════════════
+const linkChild = async (req, res) => {
+  try {
+    const parentId  = req.userId;
+    const { childEmail } = req.body;
+
+    if (!childEmail)
+      return res.status(400).json({ success: false, message: 'Child email is required' });
+
+    const studentRes = await pool.query(
+      'SELECT id, full_name, school_id FROM students WHERE email = $1',
+      [childEmail]
+    );
+
+    if (studentRes.rows.length === 0)
+      return res.status(404).json({ success: false, message: 'No student found with that email' });
+
+    const student = studentRes.rows[0];
+
+    await pool.query(
+      'UPDATE parents SET student_id = $1, child_email = $2, school_id = $3 WHERE id = $4',
+      [student.id, childEmail, student.school_id, parentId]
+    );
+
+    return res.json({ success: true, message: `Successfully linked to ${student.full_name}` });
+  } catch (error) {
+    console.error('Link child error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+module.exports = { getChildProgress, getChildGrades, getChildAttendance, linkChild };

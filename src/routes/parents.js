@@ -2,13 +2,15 @@ const express = require('express');
 const router  = express.Router();
 const { protect } = require('../middleware/auth');
 const {
-  registerParent,
-  loginParent,
   getChildProgress,
+  getChildGrades,
+  getChildAttendance,
+  linkChild,
 } = require('../controllers/parentController');
 
-router.post('/register',       registerParent);
-router.post('/login',          loginParent);
 router.get('/child-progress',  protect, getChildProgress);
+router.get('/child-grades',    protect, getChildGrades);
+router.get('/child-attendance', protect, getChildAttendance);
+router.post('/link-child',     protect, linkChild);
 
 module.exports = router;
