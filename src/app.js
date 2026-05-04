@@ -68,6 +68,7 @@ app.use('/api/video-rooms',   videoRoomRoutes);
 app.use('/api/battle',        battleRoutes);
 app.use('/api/past-questions-pdf', pastQuestionsPdfRoutes);
 app.use('/api/ai-tutor-history',   aiTutorHistoryRoutes);
+app.use('/api/notifications', require('./routes/notifications'));
 
 // ── Socket.io for Quiz Battle ──────────────────
 const battleRooms = {};

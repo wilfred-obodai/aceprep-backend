@@ -304,10 +304,188 @@ const getSchoolTeachers = async (req, res) => {
   }
 };
 
+// ══════════════════════════════════════════════
+// SEARCH SCHOOLS
+// GET /api/schools/search?q=query
+// ══════════════════════════════════════════════
+const searchSchools = async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) return res.json({ success: true, schools: [] });
+
+    const result = await pool.query(
+      `SELECT s.id, s.name, s.code, s.city, s.region, s.email, s.phone,
+              COUNT(st.id) as student_count
+       FROM schools s
+       LEFT JOIN students st ON st.school_id = s.id
+       WHERE s.is_active = true
+         AND (s.name ILIKE $1 OR s.city ILIKE $1 OR s.region ILIKE $1)
+       GROUP BY s.id, s.name, s.code, s.city, s.region, s.email, s.phone
+       ORDER BY s.name ASC
+       LIMIT 20`,
+      [`%${q}%`]
+    );
+
+    return res.json({ success: true, schools: result.rows });
+  } catch (error) {
+    console.error('Search schools error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ══════════════════════════════════════════════
+// SEND QUIZ CHALLENGE
+// POST /api/schools/challenge
+// ══════════════════════════════════════════════
+const sendChallenge = async (req, res) => {
+  try {
+    const { targetSchoolId, message } = req.body;
+    const fromSchoolId = req.schoolId;
+
+    // Check if challenge_requests table exists, create if not
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS challenge_requests (
+        id SERIAL PRIMARY KEY,
+        from_school_id INTEGER REFERENCES schools(id),
+        to_school_id   INTEGER REFERENCES schools(id),
+        message        TEXT,
+        status         VARCHAR(20) DEFAULT 'pending',
+        created_at     TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    const result = await pool.query(
+      `INSERT INTO challenge_requests (from_school_id, to_school_id, message)
+       VALUES ($1, $2, $3) RETURNING *`,
+      [fromSchoolId, targetSchoolId, message]
+    );
+
+    return res.json({ success: true, challenge: result.rows[0] });
+  } catch (error) {
+    console.error('Send challenge error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ══════════════════════════════════════════════
+// GET CHALLENGE REQUESTS
+// GET /api/schools/challenge-requests
+// ══════════════════════════════════════════════
+const getChallengeRequests = async (req, res) => {
+  try {
+    const schoolId = req.schoolId;
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS challenge_requests (
+        id SERIAL PRIMARY KEY,
+        from_school_id INTEGER REFERENCES schools(id),
+        to_school_id   INTEGER REFERENCES schools(id),
+        message        TEXT,
+        status         VARCHAR(20) DEFAULT 'pending',
+        created_at     TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    const result = await pool.query(
+      `SELECT cr.*,
+              fs.name as from_school_name,
+              ts.name as to_school_name
+       FROM challenge_requests cr
+       JOIN schools fs ON cr.from_school_id = fs.id
+       JOIN schools ts ON cr.to_school_id   = ts.id
+       WHERE cr.from_school_id = $1 OR cr.to_school_id = $1
+       ORDER BY cr.created_at DESC`,
+      [schoolId]
+    );
+
+    return res.json({ success: true, requests: result.rows });
+  } catch (error) {
+    console.error('Get challenges error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ══════════════════════════════════════════════
+// RESPOND TO CHALLENGE
+// PUT /api/schools/challenge/:id
+// ══════════════════════════════════════════════
+const respondToChallenge = async (req, res) => {
+  try {
+    const { accept } = req.body;
+    const status = accept ? 'accepted' : 'declined';
+
+    await pool.query(
+      'UPDATE challenge_requests SET status = $1 WHERE id = $2',
+      [status, req.params.id]
+    );
+
+    return res.json({ success: true, status });
+  } catch (error) {
+    console.error('Respond to challenge error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// ══════════════════════════════════════════════
+// GET REFERRAL DATA
+// GET /api/schools/referral
+// ══════════════════════════════════════════════
+const getReferral = async (req, res) => {
+  try {
+    const schoolId = req.schoolId;
+
+    // Get school code
+    const schoolRes = await pool.query(
+      'SELECT code, name FROM schools WHERE id = $1', [schoolId]
+    );
+    const school = schoolRes.rows[0];
+
+    // Create referrals table if not exists
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS school_referrals (
+        id               SERIAL PRIMARY KEY,
+        referrer_school_id INTEGER REFERENCES schools(id),
+        referred_school_id INTEGER REFERENCES schools(id),
+        created_at       TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    // Get referral count
+    const referralRes = await pool.query(
+      `SELECT sr.*, s.name, s.created_at as school_created
+       FROM school_referrals sr
+       JOIN schools s ON sr.referred_school_id = s.id
+       WHERE sr.referrer_school_id = $1`,
+      [schoolId]
+    );
+
+    const referralCount    = referralRes.rows.length;
+    const freeMonthActive  = referralCount >= 5;
+
+    return res.json({
+      success:         true,
+      referralCount,
+      freeMonthActive,
+      referredSchools: referralRes.rows.map(r => ({
+        name:       r.name,
+        created_at: r.school_created,
+      })),
+    });
+  } catch (error) {
+    console.error('Get referral error:', error.message);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
 module.exports = {
   validateSchoolCode,
   getSchoolProfile,
   getSchoolStudents,
   getSchoolMonitoring,
   getSchoolTeachers,
+  searchSchools,
+  sendChallenge,
+  getChallengeRequests,
+  respondToChallenge,
+  getReferral,
 };

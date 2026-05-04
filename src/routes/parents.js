@@ -6,11 +6,13 @@ const {
   getChildGrades,
   getChildAttendance,
   linkChild,
+  getSchoolTeachers,
 } = require('../controllers/parentController');
 
-router.get('/child-progress',  protect, getChildProgress);
-router.get('/child-grades',    protect, getChildGrades);
+router.get('/child-progress',   protect, getChildProgress);
+router.get('/child-grades',     protect, getChildGrades);
 router.get('/child-attendance', protect, getChildAttendance);
-router.post('/link-child',     protect, linkChild);
+router.post('/link-child',      protect, linkChild);
+router.get('/school-teachers',  protect, getSchoolTeachers);
 
 module.exports = router;
