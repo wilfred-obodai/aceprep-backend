@@ -10,21 +10,12 @@ const {
 } = require('../config/email');
 require('dotenv').config();
 
-// ── Helper: Generate JWT Token ─────────────────
-const generateToken = (id, role) => {
-  return jwt.sign(
-    { id, role },
-    process.env.JWT_SECRET,
-    { expiresIn: '30d' }
-  );
-};
+const generateToken = (id, role) =>
+  jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
-// ── Helper: Generate verification token ────────
-const generateVerificationToken = () => {
-  return crypto.randomBytes(32).toString('hex');
-};
+const generateVerificationToken = () =>
+  crypto.randomBytes(32).toString('hex');
 
-// ── Helper: Calculate grade letter ─────────────
 const getGradeLetter = (percentage) => {
   if (percentage >= 80) return 'A';
   if (percentage >= 70) return 'B';
@@ -36,68 +27,53 @@ const getGradeLetter = (percentage) => {
 
 // ══════════════════════════════════════════════
 // REGISTER SCHOOL
-// POST /api/auth/register/school
 // ══════════════════════════════════════════════
 const registerSchool = async (req, res) => {
-  const {
-    name, email, password, city,
-    region, phone, motto, address
-  } = req.body;
+  const { name, email, password, city, region, phone, motto, address } = req.body;
 
   if (!name || !email || !password) {
-    return res.status(400).json({
-      success: false,
-      message: 'School name, email and password are required'
-    });
+    return res.status(400).json({ success: false, message: 'School name, email and password are required' });
   }
 
   try {
-    // Check if email already exists
-    const existing = await pool.query(
-      'SELECT id FROM teachers WHERE email = $1',
-      [email]
-    );
+    const existing = await pool.query('SELECT id FROM teachers WHERE email = $1', [email]);
     if (existing.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'A school with this email already exists'
-      });
+      return res.status(400).json({ success: false, message: 'A school with this email already exists' });
     }
 
-    // Generate unique school code
     const randomNum  = crypto.randomInt(10000, 100000);
     const schoolCode = `ACP-${randomNum}`;
 
-    // Insert school
     const schoolResult = await pool.query(
-      `INSERT INTO schools
-        (name, code, city, region, email, phone, motto, address)
+      `INSERT INTO schools (name, code, city, region, email, phone, motto, address)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, name, code, city, region, email`,
       [name, schoolCode, city, region, email, phone, motto, address]
     );
     const school = schoolResult.rows[0];
 
-    // Hash password
     const hashedPassword    = await bcrypt.hash(password, 12);
     const verificationToken = generateVerificationToken();
 
-    // Create admin teacher account
+    // ✅ Auto-verify on production
     const teacherResult = await pool.query(
       `INSERT INTO teachers
-        (school_id, full_name, email, password, role, verification_token)
-       VALUES ($1, $2, $3, $4, $5, $6)
+        (school_id, full_name, email, password, role, verification_token, is_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
        RETURNING id, full_name, email, role`,
       [school.id, `${name} Admin`, email, hashedPassword, 'admin', verificationToken]
     );
-    const teacher = teacherResult.rows[0];
 
-    // Send school-specific verification email
-    await sendSchoolVerificationEmail(email, name, verificationToken);
+    // Try email but don't fail if it doesn't work
+    try {
+      await sendSchoolVerificationEmail(email, name, verificationToken);
+    } catch (emailErr) {
+      console.error('Email error (non-fatal):', emailErr.message);
+    }
 
     return res.status(201).json({
       success: true,
-      message: 'School registered! Please check your email to verify your account.',
+      message: 'School registered successfully! You can now login.',
       school: {
         id:     school.id,
         name:   school.name,
@@ -110,100 +86,72 @@ const registerSchool = async (req, res) => {
 
   } catch (error) {
     console.error('Register school error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error — please try again'
-    });
+    return res.status(500).json({ success: false, message: 'Server error — please try again' });
   }
 };
 
 // ══════════════════════════════════════════════
 // REGISTER STUDENT
-// POST /api/auth/register/student
 // ══════════════════════════════════════════════
 const registerStudent = async (req, res) => {
   const {
-    fullName, email, password,
-    dateOfBirth, gender, level,
-    yearGroup, className, shsTrack,
-    schoolCode
+    fullName, email, password, dateOfBirth, gender,
+    level, yearGroup, className, shsTrack, schoolCode
   } = req.body;
 
   if (!fullName || !email || !password || !level || !yearGroup) {
-    return res.status(400).json({
-      success: false,
-      message: 'Full name, email, password, level and year group are required'
-    });
+    return res.status(400).json({ success: false, message: 'Full name, email, password, level and year group are required' });
   }
 
   try {
-    // Check if email already exists
-    const existing = await pool.query(
-      'SELECT id FROM students WHERE email = $1',
-      [email]
-    );
+    const existing = await pool.query('SELECT id FROM students WHERE email = $1', [email]);
     if (existing.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'An account with this email already exists'
-      });
+      return res.status(400).json({ success: false, message: 'An account with this email already exists' });
     }
 
     let schoolId    = null;
     let studentType = 'independent';
 
-    // Validate school code if provided
     if (schoolCode) {
       const schoolResult = await pool.query(
         'SELECT id, name, is_active FROM schools WHERE code = $1',
         [schoolCode.toUpperCase()]
       );
-
       if (schoolResult.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'School code not found. Please check with your school admin.'
-        });
+        return res.status(404).json({ success: false, message: 'School code not found. Please check with your school admin.' });
       }
-
       if (!schoolResult.rows[0].is_active) {
-        return res.status(403).json({
-          success: false,
-          message: 'This school license has expired. Please contact your school.'
-        });
+        return res.status(403).json({ success: false, message: 'This school license has expired.' });
       }
-
       schoolId    = schoolResult.rows[0].id;
       studentType = 'school-linked';
     }
 
-    // Hash password and generate verification token
     const hashedPassword    = await bcrypt.hash(password, 12);
     const verificationToken = generateVerificationToken();
 
-    // Insert student
+    // ✅ Auto-verify on production
     const studentResult = await pool.query(
       `INSERT INTO students
         (school_id, full_name, email, password, date_of_birth,
          gender, level, year_group, class_name, shs_track,
-         student_type, verification_token)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       RETURNING id, full_name, email, level, year_group,
-                 class_name, student_type, school_id`,
-      [
-        schoolId, fullName, email, hashedPassword,
-        dateOfBirth, gender, level, yearGroup,
-        className, shsTrack, studentType, verificationToken
-      ]
+         student_type, verification_token, is_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true)
+       RETURNING id, full_name, email, level, year_group, class_name, student_type, school_id`,
+      [schoolId, fullName, email, hashedPassword, dateOfBirth, gender, level, yearGroup, className, shsTrack, studentType, verificationToken]
     );
     const student = studentResult.rows[0];
 
-    // Send student-specific verification email
-    await sendVerificationEmail(email, fullName, verificationToken);
+    // Try email but don't fail if it doesn't work
+    try {
+      await sendVerificationEmail(email, fullName, verificationToken);
+    } catch (emailErr) {
+      console.error('Email error (non-fatal):', emailErr.message);
+    }
 
     return res.status(201).json({
       success: true,
-      message: 'Account created! Please check your email to verify your account.',
+      message: 'Account created successfully! You can now login.',
       student: {
         id:          student.id,
         fullName:    student.full_name,
@@ -216,52 +164,32 @@ const registerStudent = async (req, res) => {
 
   } catch (error) {
     console.error('Register student error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error — please try again'
-    });
+    return res.status(500).json({ success: false, message: 'Server error — please try again' });
   }
 };
 
 // ══════════════════════════════════════════════
 // VERIFY EMAIL
-// GET /api/auth/verify-email?token=xxx
 // ══════════════════════════════════════════════
 const verifyEmail = async (req, res) => {
   const { token } = req.query;
-
-  if (!token) {
-    return res.status(400).json({
-      success: false,
-      message: 'Verification token is required'
-    });
-  }
+  if (!token) return res.status(400).json({ success: false, message: 'Verification token is required' });
 
   try {
-    // Check students table first
     const studentResult = await pool.query(
-      `UPDATE students
-       SET is_verified = true, verification_token = null
-       WHERE verification_token = $1
-       RETURNING id, full_name, email`,
+      `UPDATE students SET is_verified = true, verification_token = null
+       WHERE verification_token = $1 RETURNING id, full_name, email`,
       [token]
     );
 
     if (studentResult.rows.length > 0) {
       const student = studentResult.rows[0];
-      // Student welcome email
-      await sendWelcomeEmail(student.email, student.full_name);
-      return res.status(200).json({
-        success: true,
-        message: 'Email verified! You can now login to AcePrep. 🎉',
-        type:    'student'
-      });
+      try { await sendWelcomeEmail(student.email, student.full_name); } catch (e) {}
+      return res.status(200).json({ success: true, message: 'Email verified! You can now login. 🎉', type: 'student' });
     }
 
-    // Check teachers table
     const teacherResult = await pool.query(
-      `UPDATE teachers
-       SET is_verified = true, verification_token = null
+      `UPDATE teachers SET is_verified = true, verification_token = null
        WHERE verification_token = $1
        RETURNING id, full_name, email, role,
          (SELECT name FROM schools WHERE id = teachers.school_id) as school_name`,
@@ -270,200 +198,102 @@ const verifyEmail = async (req, res) => {
 
     if (teacherResult.rows.length > 0) {
       const teacher = teacherResult.rows[0];
-      // School admin welcome email
-      await sendSchoolWelcomeEmail(teacher.email, teacher.school_name || teacher.full_name);
-      return res.status(200).json({
-        success: true,
-        message: 'School account verified! You can now login to the AcePrep School Dashboard. 🏫',
-        type:    'school'
-      });
+      try { await sendSchoolWelcomeEmail(teacher.email, teacher.school_name || teacher.full_name); } catch (e) {}
+      return res.status(200).json({ success: true, message: 'School account verified! 🏫', type: 'school' });
     }
 
-    // Token not found
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid or expired verification token'
-    });
+    return res.status(400).json({ success: false, message: 'Invalid or expired verification token' });
 
   } catch (error) {
     console.error('Verify email error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error — please try again'
-    });
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
 // ══════════════════════════════════════════════
-// LOGIN
-// POST /api/auth/login
+// LOGIN (legacy)
 // ══════════════════════════════════════════════
 const login = async (req, res) => {
   const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({
-      success: false,
-      message: 'Email and password are required'
-    });
-  }
+  if (!email || !password) return res.status(400).json({ success: false, message: 'Email and password are required' });
 
   try {
-    let user     = null;
-    let userRole = 'student';
+    let user = null, userRole = 'student';
 
-    // Check students table first
     const studentResult = await pool.query(
       `SELECT s.*, sc.name as school_name, sc.code as school_code
-       FROM students s
-       LEFT JOIN schools sc ON s.school_id = sc.id
-       WHERE s.email = $1`,
-      [email]
+       FROM students s LEFT JOIN schools sc ON s.school_id = sc.id
+       WHERE s.email = $1`, [email]
     );
 
     if (studentResult.rows.length > 0) {
-      user     = studentResult.rows[0];
-      userRole = 'student';
+      user = studentResult.rows[0]; userRole = 'student';
     } else {
-      // Check teachers table
       const teacherResult = await pool.query(
         `SELECT t.*, sc.name as school_name, sc.code as school_code
-         FROM teachers t
-         LEFT JOIN schools sc ON t.school_id = sc.id
-         WHERE t.email = $1`,
-        [email]
+         FROM teachers t LEFT JOIN schools sc ON t.school_id = sc.id
+         WHERE t.email = $1`, [email]
       );
-      if (teacherResult.rows.length > 0) {
-        user     = teacherResult.rows[0];
-        userRole = user.role;
-      }
+      if (teacherResult.rows.length > 0) { user = teacherResult.rows[0]; userRole = user.role; }
     }
 
-    // User not found
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid email or password'
-      });
-    }
+    if (!user) return res.status(401).json({ success: false, message: 'Invalid email or password' });
+    if (!user.is_verified) return res.status(401).json({ success: false, message: 'Please verify your email before logging in.' });
 
-    // Check if email is verified
-    if (!user.is_verified) {
-      return res.status(401).json({
-        success: false,
-        message: 'Please verify your email before logging in. Check your inbox.'
-      });
-    }
-
-    // Check password
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid email or password'
-      });
-    }
+    if (!isMatch) return res.status(401).json({ success: false, message: 'Invalid email or password' });
 
-    // Generate token
     const token = generateToken(user.id, userRole);
 
     return res.status(200).json({
-      success: true,
-      message: 'Login successful!',
-      token,
+      success: true, message: 'Login successful!', token,
       user: {
-        id:          user.id,
-        fullName:    user.full_name,
-        email:       user.email,
-        role:        userRole,
-        schoolName:  user.school_name  || null,
-        schoolCode:  user.school_code  || null,
-        level:       user.level        || null,
-        yearGroup:   user.year_group   || null,
+        id: user.id, fullName: user.full_name, email: user.email, role: userRole,
+        schoolName: user.school_name || null, schoolCode: user.school_code || null,
+        level: user.level || null, yearGroup: user.year_group || null,
         studentType: user.student_type || null,
       }
     });
-
   } catch (error) {
     console.error('Login error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error — please try again'
-    });
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
 // ══════════════════════════════════════════════
-// REGISTER TEACHER (Admin only)
-// POST /api/auth/register/teacher
+// REGISTER TEACHER
 // ══════════════════════════════════════════════
 const registerTeacher = async (req, res) => {
   const { fullName, email, password, subjects, phone } = req.body;
-
-  if (!fullName || !email || !password) {
-    return res.status(400).json({
-      success: false,
-      message: 'Full name, email and password are required'
-    });
-  }
+  if (!fullName || !email || !password) return res.status(400).json({ success: false, message: 'Full name, email and password are required' });
 
   try {
-    // Check if email exists
-    const existing = await pool.query(
-      'SELECT id FROM teachers WHERE email = $1',
-      [email]
-    );
-    if (existing.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'A teacher with this email already exists'
-      });
-    }
+    const existing = await pool.query('SELECT id FROM teachers WHERE email = $1', [email]);
+    if (existing.rows.length > 0) return res.status(400).json({ success: false, message: 'A teacher with this email already exists' });
 
     const hashedPassword    = await bcrypt.hash(password, 12);
     const verificationToken = generateVerificationToken();
 
     const result = await pool.query(
-      `INSERT INTO teachers
-        (school_id, full_name, email, password, role,
-         subjects, phone, verification_token, is_verified)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, full_name, email, role`,
-      [
-        req.schoolId, fullName, email, hashedPassword,
-        'teacher', subjects || [], phone || null,
-        verificationToken, true
-      ]
+      `INSERT INTO teachers (school_id, full_name, email, password, role, subjects, phone, verification_token, is_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true) RETURNING id, full_name, email, role`,
+      [req.schoolId, fullName, email, hashedPassword, 'teacher', subjects || [], phone || null, verificationToken]
     );
 
-    const teacher = result.rows[0];
-
-    // Send teacher welcome email
-    await sendSchoolWelcomeEmail(email, fullName);
+    try { await sendSchoolWelcomeEmail(email, fullName); } catch (e) {}
 
     return res.status(201).json({
-      success: true,
-      message: 'Teacher account created successfully!',
-      teacher: {
-        id:       teacher.id,
-        fullName: teacher.full_name,
-        email:    teacher.email,
-        role:     teacher.role,
-      }
+      success: true, message: 'Teacher account created successfully!',
+      teacher: { id: result.rows[0].id, fullName: result.rows[0].full_name, email: result.rows[0].email, role: result.rows[0].role }
     });
-
   } catch (error) {
     console.error('Register teacher error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error — please try again'
-    });
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
 // ══════════════════════════════════════════════
 // FORGOT PASSWORD
-// POST /api/auth/forgot-password
 // ══════════════════════════════════════════════
 const forgotPassword = async (req, res) => {
   const { email, role } = req.body;
@@ -471,9 +301,9 @@ const forgotPassword = async (req, res) => {
 
   try {
     const resetToken  = generateVerificationToken();
-    const resetExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-
+    const resetExpiry = new Date(Date.now() + 60 * 60 * 1000);
     let found = false;
+    const prodUrl = process.env.FRONTEND_URL || 'https://aceprep-student.vercel.app';
 
     if (role === 'student' || !role) {
       const result = await pool.query(
@@ -482,8 +312,8 @@ const forgotPassword = async (req, res) => {
       );
       if (result.rows.length > 0) {
         found = true;
-        const resetUrl = `http://localhost:3001/reset-password?token=${resetToken}&role=student`;
-        await sendVerificationEmail(email, result.rows[0].full_name, resetToken, true, resetUrl);
+        const resetUrl = `${prodUrl}/reset-password?token=${resetToken}&role=student`;
+        try { await sendVerificationEmail(email, result.rows[0].full_name, resetToken, true, resetUrl); } catch (e) {}
       }
     }
 
@@ -494,8 +324,8 @@ const forgotPassword = async (req, res) => {
       );
       if (result.rows.length > 0) {
         found = true;
-        const resetUrl = `http://localhost:3001/reset-password?token=${resetToken}&role=admin`;
-        await sendSchoolVerificationEmail(email, result.rows[0].full_name, resetToken, true, resetUrl);
+        const resetUrl = `${prodUrl}/reset-password?token=${resetToken}&role=admin`;
+        try { await sendSchoolVerificationEmail(email, result.rows[0].full_name, resetToken, true, resetUrl); } catch (e) {}
       }
     }
 
@@ -506,16 +336,12 @@ const forgotPassword = async (req, res) => {
       );
       if (result.rows.length > 0) {
         found = true;
-        const resetUrl = `http://localhost:3001/reset-password?token=${resetToken}&role=parent`;
-        await sendVerificationEmail(email, result.rows[0].full_name, resetToken, true, resetUrl);
+        const resetUrl = `${prodUrl}/reset-password?token=${resetToken}&role=parent`;
+        try { await sendVerificationEmail(email, result.rows[0].full_name, resetToken, true, resetUrl); } catch (e) {}
       }
     }
 
-    // Always return success for security (don't reveal if email exists)
-    return res.json({
-      success: true,
-      message: 'If an account with that email exists, a reset link has been sent.'
-    });
+    return res.json({ success: true, message: 'If an account with that email exists, a reset link has been sent.' });
 
   } catch (error) {
     console.error('Forgot password error:', error.message);
@@ -525,7 +351,6 @@ const forgotPassword = async (req, res) => {
 
 // ══════════════════════════════════════════════
 // RESET PASSWORD
-// POST /api/auth/reset-password
 // ══════════════════════════════════════════════
 const resetPassword = async (req, res) => {
   const { token, password, role } = req.body;
@@ -536,32 +361,17 @@ const resetPassword = async (req, res) => {
     let updated = false;
 
     if (role === 'student') {
-      const result = await pool.query(
-        `UPDATE students SET password = $1, reset_token = NULL, reset_token_expiry = NULL
-         WHERE reset_token = $2 AND reset_token_expiry > NOW() RETURNING id`,
-        [hashedPassword, token]
-      );
-      updated = result.rows.length > 0;
+      const r = await pool.query(`UPDATE students SET password=$1, reset_token=NULL, reset_token_expiry=NULL WHERE reset_token=$2 AND reset_token_expiry>NOW() RETURNING id`, [hashedPassword, token]);
+      updated = r.rows.length > 0;
     } else if (role === 'admin') {
-      const result = await pool.query(
-        `UPDATE teachers SET password = $1, reset_token = NULL, reset_token_expiry = NULL
-         WHERE reset_token = $2 AND reset_token_expiry > NOW() RETURNING id`,
-        [hashedPassword, token]
-      );
-      updated = result.rows.length > 0;
+      const r = await pool.query(`UPDATE teachers SET password=$1, reset_token=NULL, reset_token_expiry=NULL WHERE reset_token=$2 AND reset_token_expiry>NOW() RETURNING id`, [hashedPassword, token]);
+      updated = r.rows.length > 0;
     } else if (role === 'parent') {
-      const result = await pool.query(
-        `UPDATE parents SET password = $1, reset_token = NULL, reset_token_expiry = NULL
-         WHERE reset_token = $2 AND reset_token_expiry > NOW() RETURNING id`,
-        [hashedPassword, token]
-      );
-      updated = result.rows.length > 0;
+      const r = await pool.query(`UPDATE parents SET password=$1, reset_token=NULL, reset_token_expiry=NULL WHERE reset_token=$2 AND reset_token_expiry>NOW() RETURNING id`, [hashedPassword, token]);
+      updated = r.rows.length > 0;
     }
 
-    if (!updated) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
-    }
-
+    if (!updated) return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
     return res.json({ success: true, message: 'Password reset successfully! You can now login.' });
 
   } catch (error) {
@@ -571,8 +381,7 @@ const resetPassword = async (req, res) => {
 };
 
 // ══════════════════════════════════════════════
-// STUDENT LOGIN (dedicated)
-// POST /api/auth/student/login
+// STUDENT LOGIN
 // ══════════════════════════════════════════════
 const loginStudent = async (req, res) => {
   const { email, password } = req.body;
@@ -584,7 +393,6 @@ const loginStudent = async (req, res) => {
        FROM students s LEFT JOIN schools sc ON s.school_id = sc.id
        WHERE s.email = $1`, [email]
     );
-
     if (result.rows.length === 0) return res.status(401).json({ success: false, message: 'Invalid email or password' });
 
     const student = result.rows[0];
@@ -594,25 +402,17 @@ const loginStudent = async (req, res) => {
     if (!isMatch) return res.status(401).json({ success: false, message: 'Invalid email or password' });
 
     const token = generateToken(student.id, 'student');
-
-    // Update last login
     await pool.query('UPDATE students SET last_login = NOW() WHERE id = $1', [student.id]);
 
     return res.json({
-      success: true,
-      message: 'Login successful!',
-      token,
+      success: true, message: 'Login successful!', token,
       user: {
-        id:          student.id,
-        fullName:    student.full_name,
-        email:       student.email,
-        role:        'student',
-        schoolName:  student.school_name  || null,
-        schoolCode:  student.school_code  || null,
-        level:       student.level        || null,
-        yearGroup:   student.year_group   || null,
-        className:   student.class_name   || null,
+        id: student.id, fullName: student.full_name, email: student.email,
+        role: 'student', schoolName: student.school_name || null,
+        schoolCode: student.school_code || null, level: student.level || null,
+        yearGroup: student.year_group || null, className: student.class_name || null,
         studentType: student.student_type || null,
+        shsTrack: student.shs_track || null,
       }
     });
   } catch (error) {
@@ -622,8 +422,7 @@ const loginStudent = async (req, res) => {
 };
 
 // ══════════════════════════════════════════════
-// SCHOOL ADMIN LOGIN (dedicated)
-// POST /api/auth/school/login
+// SCHOOL LOGIN
 // ══════════════════════════════════════════════
 const loginSchool = async (req, res) => {
   const { email, password } = req.body;
@@ -631,12 +430,10 @@ const loginSchool = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT t.*, sc.name as school_name, sc.code as school_code,
-              sc.logo_url, sc.city, sc.region
+      `SELECT t.*, sc.name as school_name, sc.code as school_code, sc.logo_url, sc.city, sc.region
        FROM teachers t LEFT JOIN schools sc ON t.school_id = sc.id
        WHERE t.email = $1`, [email]
     );
-
     if (result.rows.length === 0) return res.status(401).json({ success: false, message: 'Invalid email or password' });
 
     const teacher = result.rows[0];
@@ -648,23 +445,9 @@ const loginSchool = async (req, res) => {
     const token = generateToken(teacher.id, teacher.role);
 
     return res.json({
-      success: true,
-      message: 'Login successful!',
-      token,
-      user: {
-        id:       teacher.id,
-        fullName: teacher.full_name,
-        email:    teacher.email,
-        role:     teacher.role,
-      },
-      school: {
-        id:       teacher.school_id,
-        name:     teacher.school_name,
-        code:     teacher.school_code,
-        logoUrl:  teacher.logo_url,
-        city:     teacher.city,
-        region:   teacher.region,
-      }
+      success: true, message: 'Login successful!', token,
+      user: { id: teacher.id, fullName: teacher.full_name, email: teacher.email, role: teacher.role },
+      school: { id: teacher.school_id, name: teacher.school_name, code: teacher.school_code, logoUrl: teacher.logo_url, city: teacher.city, region: teacher.region }
     });
   } catch (error) {
     console.error('School login error:', error.message);
@@ -674,7 +457,6 @@ const loginSchool = async (req, res) => {
 
 // ══════════════════════════════════════════════
 // PARENT LOGIN
-// POST /api/auth/parent/login
 // ══════════════════════════════════════════════
 const loginParent = async (req, res) => {
   const { email, password } = req.body;
@@ -682,12 +464,9 @@ const loginParent = async (req, res) => {
 
   try {
     const result = await pool.query('SELECT * FROM parents WHERE email = $1', [email]);
-
     if (result.rows.length === 0) return res.status(401).json({ success: false, message: 'Invalid email or password' });
 
     const parent = result.rows[0];
-
-    // Auto-verify parents who aren't verified yet
     if (!parent.is_verified) {
       await pool.query('UPDATE parents SET is_verified = true WHERE id = $1', [parent.id]);
     }
@@ -698,16 +477,8 @@ const loginParent = async (req, res) => {
     const token = generateToken(parent.id, 'parent');
 
     return res.json({
-      success: true,
-      message: 'Login successful!',
-      token,
-      parent: {
-        id:       parent.id,
-        fullName: parent.full_name,
-        email:    parent.email,
-        role:     'parent',
-        phone:    parent.phone,
-      }
+      success: true, message: 'Login successful!', token,
+      parent: { id: parent.id, fullName: parent.full_name, email: parent.email, role: 'parent', phone: parent.phone }
     });
   } catch (error) {
     console.error('Parent login error:', error.message);
@@ -717,28 +488,22 @@ const loginParent = async (req, res) => {
 
 // ══════════════════════════════════════════════
 // REGISTER PARENT
-// POST /api/auth/parent/register
 // ══════════════════════════════════════════════
 const registerParent = async (req, res) => {
   const { fullName, email, password, phone, schoolCode } = req.body;
-  if (!fullName || !email || !password) {
-    return res.status(400).json({ success: false, message: 'Full name, email and password are required' });
-  }
+  if (!fullName || !email || !password) return res.status(400).json({ success: false, message: 'Full name, email and password are required' });
 
   try {
     const existing = await pool.query('SELECT id FROM parents WHERE email = $1', [email]);
-    if (existing.rows.length > 0) {
-      return res.status(400).json({ success: false, message: 'An account with this email already exists' });
-    }
+    if (existing.rows.length > 0) return res.status(400).json({ success: false, message: 'An account with this email already exists' });
 
     let schoolId = null;
     if (schoolCode) {
-      const schoolResult = await pool.query('SELECT id FROM schools WHERE code = $1', [schoolCode.toUpperCase()]);
-      if (schoolResult.rows.length > 0) schoolId = schoolResult.rows[0].id;
+      const sr = await pool.query('SELECT id FROM schools WHERE code = $1', [schoolCode.toUpperCase()]);
+      if (sr.rows.length > 0) schoolId = sr.rows[0].id;
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
-
     const result = await pool.query(
       `INSERT INTO parents (full_name, email, password, phone, school_id, is_verified)
        VALUES ($1, $2, $3, $4, $5, true) RETURNING id, full_name, email`,
@@ -749,9 +514,7 @@ const registerParent = async (req, res) => {
     const token  = generateToken(parent.id, 'parent');
 
     return res.status(201).json({
-      success: true,
-      message: 'Parent account created successfully!',
-      token,
+      success: true, message: 'Parent account created successfully!', token,
       parent: { id: parent.id, fullName: parent.full_name, email: parent.email, role: 'parent' }
     });
   } catch (error) {
@@ -761,16 +524,7 @@ const registerParent = async (req, res) => {
 };
 
 module.exports = {
-  registerSchool,
-  registerStudent,
-  registerTeacher,
-  registerParent,
-  verifyEmail,
-  login,
-  loginStudent,
-  loginSchool,
-  loginParent,
-  forgotPassword,
-  resetPassword,
-  getGradeLetter
+  registerSchool, registerStudent, registerTeacher, registerParent,
+  verifyEmail, login, loginStudent, loginSchool, loginParent,
+  forgotPassword, resetPassword, getGradeLetter
 };
