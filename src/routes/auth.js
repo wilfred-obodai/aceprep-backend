@@ -17,24 +17,33 @@ const {
 } = require('../controllers/authController');
 
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 10,
-  message: { success: false, message: 'Too many login attempts — please try again in 15 minutes' },
-  standardHeaders: true, legacyHeaders: false,
+  windowMs:       15 * 60 * 1000,
+  max:            10,
+  message:        { success: false, message: 'Too many login attempts — please try again in 15 minutes' },
+  standardHeaders: true,
+  legacyHeaders:  false,
+  validate:       false,
 });
 
 const registerLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, max: 5,
-  message: { success: false, message: 'Too many registration attempts — please try again later' },
-  standardHeaders: true, legacyHeaders: false,
+  windowMs:       60 * 60 * 1000,
+  max:            20,
+  message:        { success: false, message: 'Too many registration attempts — please try again later' },
+  standardHeaders: true,
+  legacyHeaders:  false,
+  validate:       false,
 });
 
 const verifyLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 10,
-  message: { success: false, message: 'Too many verification attempts' },
-  standardHeaders: true, legacyHeaders: false,
+  windowMs:       15 * 60 * 1000,
+  max:            10,
+  message:        { success: false, message: 'Too many verification attempts' },
+  standardHeaders: true,
+  legacyHeaders:  false,
+  validate:       false,
 });
 
-// ── Legacy routes (keep for backward compat) ──
+// ── Legacy routes ──────────────────────────────
 router.post('/register/school',   registerLimiter, registerSchool);
 router.post('/register/student',  registerLimiter, registerStudent);
 router.post('/register/teacher',  protect, adminOnly, registerTeacher);
@@ -50,7 +59,7 @@ router.post('/parent/login',      loginLimiter,    loginParent);
 router.post('/parent/register',   registerLimiter, registerParent);
 
 // ── Password Reset ─────────────────────────────
-router.post('/forgot-password',   forgotPassword);
-router.post('/reset-password',    resetPassword);
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password',  resetPassword);
 
 module.exports = router;
