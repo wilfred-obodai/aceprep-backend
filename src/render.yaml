@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: aceprep-backend
+    env: node
+    buildCommand: npm install
+    startCommand: node src/app.js
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
